@@ -1,1 +1,426 @@
+!python main.py
 
+pip install pygame
+
+import pygame
+import random
+import sys
+
+#Khởi tạo
+pygame.init()
+
+#Hằng số 
+SCREEN_W, SCREEN_H = 400, 600
+FPS            = 60
+GRAVITY        = 0.45
+JUMP_FORCE     = -9
+PIPE_SPEED     = 3
+PIPE_GAP       = 155       
+PIPE_INTERVAL  = 1600      
+GROUND_H       = 80       
+#Màu sắc 
+SKY        = (113, 197, 207)
+WHITE      = (255, 255, 255)
+BLACK      = (  0,   0,   0)
+YELLOW     = (255, 204,   0)
+YELLOW_LT  = (255, 230, 120)
+ORANGE     = (255, 130,   0)
+GREEN      = ( 78, 154,   6)
+GREEN_DK   = ( 50, 100,   0)
+GROUND_CLR = (222, 184, 135)
+DIRT       = (139,  90,  43)
+GRASS      = (100, 160,  30)
+
+class Bird:
+
+    WING_FRAMES = 3          # Số frame cánh
+    WING_DELAY  = 100        # ms mỗi frame cánh
+
+    def __init__(self, x: int, y: int):
+        self.start_x, self.start_y = x, y
+        self.reset()
+        self.high_score = 0
+        self.ground_x = 0
+
+    # Khởi tạo lại 
+    def reset(self):
+        self.x        = float(self.start_x)
+        self.y        = float(self.start_y)
+        self.velocity = 0.0
+        self.rotation = 0.0       # Độ nghiêng đầu chim
+        self.wing_frame = 0
+        self.wing_timer = 0
+
+    #Logic 
+    def jump(self):
+        """Chim vỗ cánh bay lên."""
+        self.velocity  = JUMP_FORCE
+        self.wing_frame = 0        # Bắt đầu lại animation
+
+    def update(self, dt: int):
+        """Cập nhật vật lý và animation cánh. dt tính bằng ms."""
+        # Trọng lực
+        self.velocity += GRAVITY
+        self.velocity  = min(self.velocity, 14)   # Giới hạn tốc độ rơi
+        self.y        += self.velocity
+
+        # Góc nghiêng: hướng lên khi nhảy, chúi xuống khi rơi
+        self.rotation = max(-30, min(self.velocity * 4.5, 70))
+
+        # Animation vỗ cánh theo thời gian thực
+        self.wing_timer += dt
+        if self.wing_timer >= self.WING_DELAY:
+            self.wing_timer  = 0
+            self.wing_frame  = (self.wing_frame + 1) % self.WING_FRAMES
+
+    #Vẽ
+    def draw(self, screen: pygame.Surface):
+        W, H = 44, 32
+        surf = pygame.Surface((W + 22, H + 12), pygame.SRCALPHA)
+
+        ox, oy = 10, 5  
+
+        # Thân (vàng)
+        pygame.draw.ellipse(surf, YELLOW,    (ox,      oy,      W,    H))
+        pygame.draw.ellipse(surf, (200,150,0),(ox,      oy,      W,    H), 2)
+
+        # Bụng (vàng nhạt)
+        pygame.draw.ellipse(surf, YELLOW_LT, (ox + 5,  oy + 11, 18,  14))
+
+        # Cánh — 3 trạng thái vỗ: -7 (lên) / 0 (giữa) / +7 (xuống)
+        wing_dy = [-7, 0, 7][self.wing_frame]
+        pygame.draw.ellipse(surf, ORANGE, (ox + 3,  oy + 10 + wing_dy, 16, 10))
+
+        # Mắt
+        pygame.draw.ellipse(surf, WHITE,  (ox + W - 14, oy + 4,  13, 13))
+        pygame.draw.ellipse(surf, BLACK,  (ox + W - 10, oy + 7,   7,  7))
+
+        # Mỏ
+        bx = ox + W - 2
+        by = oy + H // 2
+        pygame.draw.polygon(surf, ORANGE, [(bx, by - 7), (bx + 13, by), (bx, by + 7)])
+
+        # Xoay toàn bộ surface
+        rotated = pygame.transform.rotate(surf, -self.rotation)
+        rect    = rotated.get_rect(center=(int(self.x), int(self.y)))
+        screen.blit(rotated, rect)
+        
+       
+    #Hitbox
+    def get_rect(self) -> pygame.Rect:
+        return pygame.Rect(int(self.x) - 14, int(self.y) - 11, 28, 22)
+
+
+class Pipe:
+
+    WIDTH  = 62
+    CAP_H  = 22    # Chiều cao phần "nắp" ống
+
+    def __init__(self, x: int, mode="normal"):
+        self.x      = float(x)
+        self.mode   = mode          # ← thêm
+        self.scored = False
+        self.gap_y = random.randint(200, SCREEN_H - GROUND_H - 200)
+        self.top    = self.gap_y - PIPE_GAP // 2
+        self.bottom = self.gap_y + PIPE_GAP // 2
+        self.vy = 2   
+        self.moved = False 
+        
+    def update(self, bird_y=None, bird_vel=0):
+        self.x -= PIPE_SPEED
+        if self.mode == "ai" and bird_y is not None:
+            if not self.moved:
+                if abs(self.x - 100) < 180:
+                    predicted_y = bird_y + bird_vel * 5
+                    if predicted_y > self.gap_y:
+                        self.gap_y -= 100
+                    else:
+                        self.gap_y += 100
+                    self.moved = True
+
+            min_y = 120
+            max_y = SCREEN_H - GROUND_H - 120
+            self.gap_y = max(min_y, min(max_y, self.gap_y))
+
+            self.top = self.gap_y - PIPE_GAP // 2
+            self.bottom = self.gap_y + PIPE_GAP // 2
+
+    def is_off_screen(self) -> bool:
+        return self.x + self.WIDTH < 0
+
+    def collides(self, bird_rect: pygame.Rect) -> bool:
+        """Trả True nếu chim đâm vào ống trên hoặc dưới."""
+        top_rect    = pygame.Rect(self.x, 0,          self.WIDTH, self.top)
+        bottom_rect = pygame.Rect(self.x, self.bottom, self.WIDTH, SCREEN_H)
+        return top_rect.colliderect(bird_rect) or bottom_rect.colliderect(bird_rect)
+
+    #Vẽ 
+    
+    def draw(self, screen: pygame.Surface):
+        x = int(self.x)
+        W = self.WIDTH
+        C = self.CAP_H
+        
+        # Bảng màu 3D
+        P_LIGHT = (140, 200, 50)  # Vệt sáng
+        P_MID   = (78, 154, 6)    # Màu chính (GREEN)
+        P_DARK  = (50, 100, 0)    # Bóng tối (GREEN_DK)
+
+        def draw_pipe_section(y_start, height, is_top):
+            # Thân ống
+            rect = pygame.Rect(x + 6, y_start, W - 12, height)
+            pygame.draw.rect(screen, P_MID, rect)
+            pygame.draw.rect(screen, P_LIGHT, (x + 10, y_start, 6, height)) # Vệt sáng thân
+            pygame.draw.rect(screen, P_DARK, (x + W - 18, y_start, 4, height)) # Vệt tối thân
+            pygame.draw.rect(screen, BLACK, rect, 2) # Viền
+
+            # Nắp ống
+            cap_y = (self.top - C) if is_top else self.bottom
+            cap_rect = pygame.Rect(x, cap_y, W, C)
+            pygame.draw.rect(screen, P_MID, cap_rect)
+            pygame.draw.rect(screen, P_LIGHT, (x + 5, cap_y + 2, 8, C - 4)) # Vệt sáng nắp
+            pygame.draw.rect(screen, BLACK, cap_rect, 2)
+
+        # Vẽ ống trên
+        draw_pipe_section(0, self.top - C, True)
+        # Vẽ ống dưới
+        draw_pipe_section(self.bottom + C, SCREEN_H - self.bottom - C - GROUND_H, False)
+        x = int(self.x)
+        W = self.WIDTH
+        C = self.CAP_H
+
+       
+class Game:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        pygame.display.set_caption("Flappy Bird")
+        self.clock      = pygame.time.Clock()
+        self.high_score = 0
+        self.mode = "normal"  # hoặc "ai"
+        self.show_mode_menu = False
+        self.btn_mode = pygame.Rect(SCREEN_W//2 - 100, SCREEN_H//2 + 120, 200, 40)
+        self.btn_normal = pygame.Rect(SCREEN_W//2 - 100, SCREEN_H//2 + 170, 200, 40)
+        self.btn_ai     = pygame.Rect(SCREEN_W//2 - 100, SCREEN_H//2 + 220, 200, 40)
+        self.ground_x = 0
+
+        # Font chữ
+        self.font_big   = pygame.font.SysFont("Segoe UI", 52, bold=True)
+        self.font_mid   = pygame.font.SysFont("Segoe UI", 30, bold=True)
+        self.font_small = pygame.font.SysFont("Segoe UI", 20)
+
+        # Đám mây (vị trí cố định, đủ dùng)
+        self.clouds = [(55, 75), (195, 48), (325, 108), (140, 165), (290, 55)]
+
+        self.bird = Bird(100, SCREEN_H // 2)
+        self.reset()
+
+    #Reset về trạng thái ban đầu 
+    def reset(self):
+        self.bird.reset()
+        self.pipes      = []
+        self.score      = 0
+        self.state      = "waiting"   # waiting | playing | gameover
+        self.pipe_timer = 0
+
+    #Sinh ống mới 
+    def _spawn_pipe(self):
+        #self.pipes.append(Pipe(SCREEN_W + 10))
+        self.pipes.append(Pipe(SCREEN_W + 10, self.mode))
+
+    #Xử lý sự kiện
+    def handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mx, my = event.pos
+                if self.show_mode_menu:
+                    if self.btn_normal.collidepoint(mx, my):
+                        self.mode = "normal"
+                        self.show_mode_menu = False
+                        self.reset()
+                        return
+                    if self.btn_ai.collidepoint(mx, my):
+                        self.mode = "ai"
+                        self.show_mode_menu = False
+                        self.reset()
+                        return
+                    
+                  
+                elif self.state == "waiting" and self.btn_mode.collidepoint(mx, my):
+                    self.show_mode_menu = not self.show_mode_menu
+               
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    if self.state == "waiting":
+                        self.state = "playing"
+                        self.bird.jump()
+                    elif self.state == "playing":
+                        self.bird.jump()
+                    elif self.state == "gameover":
+                        self.reset()
+
+    #Cập nhật logic game
+    def update(self, dt: int):
+        if self.state != "playing":
+            return
+
+        self.bird.update(dt)
+
+        # Sinh ống theo định kỳ
+        self.pipe_timer += dt
+        if self.pipe_timer >= PIPE_INTERVAL:
+            self.pipe_timer = 0
+            self._spawn_pipe()
+
+        # Cập nhật và tính điểm
+        for pipe in self.pipes:
+            pipe.update(self.bird.y, self.bird.velocity)
+            if not pipe.scored and pipe.x + pipe.WIDTH < self.bird.x:
+                pipe.scored = True
+                self.score += 1
+
+        # Xóa ống ra khỏi màn hình
+        self.pipes = [p for p in self.pipes if not p.is_off_screen()]
+
+        # Va chạm với đất / trần
+        ground_y = SCREEN_H - GROUND_H
+
+        if self.bird.y + 15 >= ground_y or self.bird.y - 15 <= 0:
+            self.high_score = max(self.high_score, self.score)
+            self.state = "gameover"
+            return
+
+        # Va chạm với ống
+        bird_rect = self.bird.get_rect()
+        for pipe in self.pipes:
+            if pipe.collides(bird_rect):
+                self.high_score = max(self.high_score, self.score)
+                self.state = "gameover"
+                return
+
+    #Vẽ nền (bầu trời + mây)
+    def _draw_background(self):
+        self.screen.fill(SKY)
+        for cx, cy in self.clouds:
+            pygame.draw.ellipse(self.screen, WHITE, (cx - 32, cy,      64, 26))
+            pygame.draw.ellipse(self.screen, WHITE, (cx - 18, cy - 16, 42, 28))
+            pygame.draw.ellipse(self.screen, WHITE, (cx + 4,  cy -  2, 38, 22))
+       
+
+    #Vẽ mặt đất
+    def _draw_ground(self):
+        gy = SCREEN_H - GROUND_H
+        # Tăng tiến vị trí x của đất dựa trên tốc độ ống
+        if self.state == "playing":
+            self.ground_x = (self.ground_x - PIPE_SPEED) % 40
+        
+        # Nền đất chính
+        pygame.draw.rect(self.screen, GROUND_CLR, (0, gy, SCREEN_W, GROUND_H))
+        # Dải cỏ phía trên
+        pygame.draw.rect(self.screen, GRASS, (0, gy, SCREEN_W, 10))
+        # Viền đất tối
+        pygame.draw.rect(self.screen, DIRT, (0, gy + 10, SCREEN_W, 2))
+        
+        # Vẽ các vạch đất di chuyển tạo cảm giác tốc độ
+        for gx in range(-40, SCREEN_W + 40, 40):
+            pygame.draw.line(self.screen, DIRT, 
+                             (gx + self.ground_x, gy + 12), 
+                             (gx + self.ground_x + 15, gy + GROUND_H), 3)
+
+    #Vẽ điểm số 
+    def _draw_score(self):
+        text  = str(self.score)
+        shadow = self.font_big.render(text, True, BLACK)
+        score  = self.font_big.render(text, True, WHITE)
+        cx = SCREEN_W // 2
+        self.screen.blit(shadow, shadow.get_rect(centerx=cx + 2, top=22))
+        self.screen.blit(score,  score.get_rect(centerx=cx,      top=20))
+
+
+    #Màn hình chờ
+    def _draw_waiting(self):
+        cx = SCREEN_W // 2
+        cy = SCREEN_H // 2
+        
+        # Tiêu đề game (vẽ bóng đổ thủ công cho đẹp)
+        title_txt = "FLAPPY BIRD"
+        shadow = self.font_big.render(title_txt, True, BLACK)
+        main_t = self.font_big.render(title_txt, True, WHITE)
+        self.screen.blit(shadow, shadow.get_rect(center=(cx + 3, cy - 100 + 3)))
+        self.screen.blit(main_t, main_t.get_rect(center=(cx, cy - 100)))
+
+        # Hàm vẽ nút bấm hiện đại
+        def draw_modern_btn(rect, text, color, active=False):
+            # Bóng đổ dưới nút
+            pygame.draw.rect(self.screen, (30, 30, 30), (rect.x + 3, rect.y + 3, rect.width, rect.height), border_radius=10)
+            # Thân nút
+            main_color = color if not active else (min(color[0]+40, 255), min(color[1]+40, 255), min(color[2]+40, 255))
+            pygame.draw.rect(self.screen, main_color, rect, border_radius=10)
+            # Viền nút
+            pygame.draw.rect(self.screen, WHITE, rect, 2, border_radius=10)
+            # Chữ trong nút
+            txt_surf = self.font_small.render(text, True, WHITE)
+            self.screen.blit(txt_surf, txt_surf.get_rect(center=rect.center))
+
+        # Nút chính "Chọn chế độ"
+        draw_modern_btn(self.btn_mode, f"Chế độ: {self.mode.upper()}", (50, 150, 250))
+
+        if self.show_mode_menu:
+            # Làm tối nền khi mở menu
+            overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 50))
+            self.screen.blit(overlay, (0,0))
+            
+            draw_modern_btn(self.btn_normal, "NORMAL MODE", (70, 70, 70), self.mode == "normal")
+            draw_modern_btn(self.btn_ai, "AI CHALLENGE", (200, 50, 50), self.mode == "ai")
+        else:
+            hint = self.font_small.render("Nhấn SPACE để bay", True, (240, 240, 240))
+            self.screen.blit(hint, hint.get_rect(center=(cx, cy + 80)))
+   
+         
+
+    #Màn hình Game Over
+    def _draw_gameover(self):
+        # Lớp phủ tối mờ
+        overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 140))
+        self.screen.blit(overlay, (0, 0))
+
+        go  = self.font_big.render("Game Over",              True, (255, 80,  80))
+        sc  = self.font_mid.render(f"Điểm: {self.score}", True, WHITE)
+        hs  = self.font_small.render(f"Điểm cao nhất: {self.high_score}", True, (255, 255, 100))
+        rst = self.font_small.render("Nhấn SPACE để chơi lại", True, (200, 200, 200))
+
+        cx = SCREEN_W // 2
+        self.screen.blit(go,  go.get_rect( centerx=cx, centery=230))
+        self.screen.blit(sc,  sc.get_rect( centerx=cx, centery=295))
+        self.screen.blit(hs, hs.get_rect(centerx=cx, centery=320))
+        self.screen.blit(rst, rst.get_rect(centerx=cx, centery=345))
+
+    #Vòng lặp chính 
+    def run(self):
+        while True:
+            dt = self.clock.tick(FPS)    # Thời gian (ms) kể từ frame trước
+
+            self.handle_events()
+            self.update(dt)
+
+            # Vẽ theo thứ tự từ dưới lên
+            self._draw_background()
+            for pipe in self.pipes:
+                pipe.draw(self.screen)
+            self._draw_ground()
+            self.bird.draw(self.screen)
+            self._draw_score()
+
+            if self.state == "waiting":
+                self._draw_waiting()
+            elif self.state == "gameover":
+                self._draw_gameover()
+
+            pygame.display.flip()
+
+if __name__ == "__main__":
+    Game().run()
