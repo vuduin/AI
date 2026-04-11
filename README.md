@@ -22,3 +22,15 @@
 
 ## Tech
 - Python, Pygame
+
+# Hướng dẫn vào game
+Cách 1: Đọc README để xem thêm giao diện và video
+- Bước 1: Vào link github.
+- Bước 2: Click vào mục “Code_FlappyBird.ipynb” -> Tải xuống tệp gốc.
+- Bước 3: Sau khi tải xuống file, file có thể chạy trên Visual Studio Code/ Jupyter Notebook.
+- Bước 4: Chạy code và chơi game.
+
+Cách 2:
+- Bước 1: Vào link github.
+- Bước 2: Copy code ở mục “Code_FlappyBird.ipynb”
+- Bước 3: Dán và chạy code trên Visual Studio Code/ Jupyter Notebook.
